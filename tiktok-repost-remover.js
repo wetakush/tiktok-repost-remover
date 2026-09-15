@@ -1,5 +1,13 @@
 // ============================================================
-// TikTok Unrepost Script — delete all TikTok reposts
+// TikTok Unrepost Script — удаляет ВСЕ репосты через внутреннее API
+// ============================================================
+// Как пользоваться:
+//   1. Открой в браузере СВОЙ профиль: https://www.tiktok.com/@твой_ник
+//   2. Открой DevTools (F12) -> Console
+//   3. Вставь весь этот скрипт и нажми Enter
+//
+// Удаление идёт пачками: CONCURRENCY запросов параллельно.
+// DRY_RUN = true — только показать список, ничего не удаляя.
 // ============================================================
 
 (() => {
@@ -10,6 +18,7 @@ const PAGE_SIZE = 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// параллельная обработка массива с ограничением параллелизма
 async function pool(items, limit, worker) {
   let i = 0;
   const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -21,6 +30,7 @@ async function pool(items, limit, worker) {
   await Promise.all(runners);
 }
 
+// --- 1. Достаём secUid из данных своей страницы профиля ---
 function deepFindSecUids(obj, found) {
   if (!obj || typeof obj !== 'object') return;
   if (obj.secUid && obj.uniqueId) found.push({ secUid: obj.secUid, uniqueId: obj.uniqueId });
@@ -43,6 +53,7 @@ async function getSecUid() {
     } catch {}
   }
 
+  // Фолбэк: перекачиваем HTML своего профиля и ищем secUid регэкспом
   const html = await (await fetch(location.pathname, { credentials: 'include' })).text();
   const esc = nick.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const m = html.match(new RegExp(`"secUid":"([^"]+)","uniqueId":"${esc}"`))
@@ -52,6 +63,7 @@ async function getSecUid() {
   throw new Error('secUid не найден. Сделай Ctrl+Shift+R и запусти скрипт снова.');
 }
 
+// --- 2. Получаем страницу списка репостов ---
 async function fetchRepostPage(secUid, cursor) {
   const url =
     '/api/repost/item_list/' +
@@ -67,6 +79,7 @@ async function fetchRepostPage(secUid, cursor) {
   };
 }
 
+// --- 3. Снимаем репост (реальный эндпоинт: /tiktok/v1/upvote/delete) ---
 async function unrepost(awemeId, retries = 2) {
   let lastErr;
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -92,6 +105,7 @@ async function unrepost(awemeId, retries = 2) {
   throw lastErr;
 }
 
+// --- 4. Главный цикл ---
 (async () => {
   const secUid = await getSecUid();
   console.log(`secUid: ${secUid.slice(0, 12)}...`);
@@ -108,6 +122,7 @@ async function unrepost(awemeId, retries = 2) {
       for (const item of page.items) console.log(`[DRY RUN] удалил бы: ${item.id} — ${item.desc}`);
       total += page.items.length;
     } else {
+      // удаляем страницу пачкой: CONCURRENCY запросов параллельно
       await pool(page.items, CONCURRENCY, async (item) => {
         total++;
         try {
